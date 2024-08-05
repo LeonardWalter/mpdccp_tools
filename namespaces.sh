@@ -5,10 +5,11 @@
 
 dmesg -C
 
-iperfstr="iperf3 -c 10.0.42.1 -u -b 3000k -t 20 -4 -l 1050"
+iperfstr="iperf3 -c 10.0.42.1 -u -b 3000k -t 2 -4 -l 1050"
 #iperfstr="iperf3 -c 10.0.42.1 -t 10 -4"
 
-echo cubic > /proc/sys/net/ipv4/tcp_congestion_control
+echo fq > /proc/sys/net/core/default_qdisc
+echo bbr > /proc/sys/net/ipv4/tcp_congestion_control
 
 echo 0 > /sys/module/mpdccp/parameters/ro_dbug_state
 echo 0 > /sys/module/mpdccp/parameters/mpdccp_debug
@@ -23,11 +24,11 @@ echo 0 > /proc/sys/mpdccp_active_reordering/adaptive
 echo 150 > /proc/sys/mpdccp_active_reordering/fixed_timeout
 echo 3 > /proc/sys/mpdccp_active_reordering/loss_detection
 echo 200 > /proc/sys/mpdccp_active_reordering/expiry_timeout
-echo 1 > /proc/sys/mpdccp_active_reordering/equalize_delay
+echo 2 > /proc/sys/mpdccp_active_reordering/equalize_delay
 
 #echo default > /proc/sys/net/mpdccp/mpdccp_scheduler
-echo srtt > /proc/sys/net/mpdccp/mpdccp_scheduler
-#echo rr > /proc/sys/net/mpdccp/mpdccp_scheduler
+#echo srtt > /proc/sys/net/mpdccp/mpdccp_scheduler
+echo rr > /proc/sys/net/mpdccp/mpdccp_scheduler
 echo 4 > /proc/sys/net/mpdccp/mpdccp_rtt_config
 
 
@@ -116,6 +117,7 @@ reset () {
 
 #ip netns exec ns1 dmesg -C
 #ip netns exec ns2 dmesg -C
+ip netns exec ns1 bash -c 'tc -s qdisc show dev enp0s9 && tc -s qdisc show dev enp0s10'
 
 ip netns exec ns2 ssh 192.168.102.1 "{ \
     /home/user/setdelay.sh 8 30 -q; \
