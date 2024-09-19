@@ -5,32 +5,35 @@
 
 dmesg -C
 
-iperfstr="iperf3 -c 10.0.42.1 -u -b 3000k -t 2 -4 -l 1050"
-#iperfstr="iperf3 -c 10.0.42.1 -t 10 -4"
+#iperfstr="iperf3 -c 10.0.42.1 -u -b 3000k -t 10 -4 -l 1050"
+iperfstr="iperf3 -c 10.0.42.1 -t 100 -4" # -P 5"
+#iperfstr="iperf3 -c 192.168.102.10 -t 10 -4"
 
-echo fq > /proc/sys/net/core/default_qdisc
-echo bbr > /proc/sys/net/ipv4/tcp_congestion_control
+delay1=30
+delay2=10
+
+/home/user/ccid5.sh
 
 echo 0 > /sys/module/mpdccp/parameters/ro_dbug_state
-echo 0 > /sys/module/mpdccp/parameters/mpdccp_debug
 echo 0 > /sys/module/dccp/parameters/ccid2_debug
-echo 0 > /sys/module/dccp/parameters/dccp_debug
-echo 0 > /proc/sys/net/mpdccp/mpdccp_debug
+echo 1 > /sys/module/dccp/parameters/dccp_debug
+echo 1 > /sys/module/mpdccp/parameters/mpdccp_debug
 
-#echo default > /proc/sys/net/mpdccp/mpdccp_reordering
+#echo default > /proc/sys/net/mpdccp/mpdccp_reordering && rmmod mpdccp_reorder_active
 echo active > /proc/sys/net/mpdccp/mpdccp_reordering
+echo 0 > /proc/sys/mpdccp_active_reordering/equalize_delay
 
 echo 0 > /proc/sys/mpdccp_active_reordering/adaptive
 echo 150 > /proc/sys/mpdccp_active_reordering/fixed_timeout
 echo 3 > /proc/sys/mpdccp_active_reordering/loss_detection
 echo 200 > /proc/sys/mpdccp_active_reordering/expiry_timeout
-echo 2 > /proc/sys/mpdccp_active_reordering/equalize_delay
+echo 2500 > /proc/sys/mpdccp_active_reordering/not_rcv_max
 
 #echo default > /proc/sys/net/mpdccp/mpdccp_scheduler
 #echo srtt > /proc/sys/net/mpdccp/mpdccp_scheduler
 echo rr > /proc/sys/net/mpdccp/mpdccp_scheduler
 echo 4 > /proc/sys/net/mpdccp/mpdccp_rtt_config
-
+echo 1 > /proc/sys/net/mpdccp/mpdccp_accept_prio
 
 server_setup () {
 	ip a add 192.168.102.10/24 dev enp0s8
@@ -77,7 +80,7 @@ export -f client_tun
 ns_setup () {
 	ip netns add ns1
 	ip l set enp0s9 netns ns1
-	ip netns exec ns1 bash -c 'client_setup "enp0s9" "100" "7"'
+	ip netns exec ns1 bash -c 'client_setup "enp0s9" "100" "5"'
 
 	ip l set enp0s10 netns ns1
 	ip netns exec ns1 bash -c 'client_setup "enp0s10" "101" "4"'
@@ -91,11 +94,10 @@ ns_setup () {
 
 tun_setup () {
 	echo 0 > /proc/sys/net/ldt/debug
+	sleep 2
 	ip netns exec ns2 bash -c 'server_tun'
 	sleep 2
-
 	ip netns exec ns1 bash -c 'client_tun'
-	sleep 2
 	echo "mpdccp tunnels configured"
 }
 
@@ -103,7 +105,7 @@ reset () {
 	ip netns exec ns1 ldt rmdev tp1
 	sleep 1
 	ip netns exec ns2 ldt rmdev tp0
-	sleep 1
+	sleep 2
 	modprobe -r ldt
 	modprobe -r mpdccp_reorder_active
 	modprobe -r mpdccp_sched_rr
@@ -115,26 +117,41 @@ reset () {
 [ "$(ip netns list | grep ns1)" ] || ns_setup
 [ "$(ip netns exec ns2 ldt | grep tp0)" ] || tun_setup
 
-#ip netns exec ns1 dmesg -C
-#ip netns exec ns2 dmesg -C
 ip netns exec ns1 bash -c 'tc -s qdisc show dev enp0s9 && tc -s qdisc show dev enp0s10'
+echo " "
+echo "Testing $(</proc/sys/net/mpdccp/mpdccp_scheduler) scheduler enp9: $(ip netns exec ns1 cat /sys/module/mpdccplink/links/dev/enp0s9/mpdccp_prio) enp10: $(ip netns exec ns1 cat /sys/module/mpdccplink/links/dev/enp0s10/mpdccp_prio)"
 
 ip netns exec ns2 ssh 192.168.102.1 "{ \
-    /home/user/setdelay.sh 8 30 -q; \
-    /home/user/setdelay.sh 9 10; \
+    /home/user/setdelay.sh 8 $delay1 -q; \
+    /home/user/setdelay.sh 9 $delay2; \
+    /home/user/tcheck.sh s; \
 }"
 
 sleep 1
 ip netns exec ns2 iperf3 -s -i 1 -4 & #> /dev/null 2>&1 &
 sleep 1
-ip netns exec ns1 $iperfstr > /dev/null 2>&1
-sleep 1
-ip netns exec ns2 pkill iperf3
 
-sstring=$(dmesg | grep -m1 "send [0-9]*99" | grep -o 'DEQ(\w*): send')
-rstring=$(dmesg | grep -v "${sstring%%:*}" | grep -m1 "receive [0-9]*99" | grep -o 'DEQ(\w*)')
-dmesg | grep -e "$sstring" -e "$rstring" > /tmp/mptest.log
+read
+echo 0 > /sys/module/dccp/parameters/dccp_debug
+echo 0 > /sys/module/mpdccp/parameters/mpdccp_debug
+
+ip netns exec ns1 $iperfstr > /dev/null 2>&1
+
+ip netns exec ns2 ssh 192.168.102.1 /home/user/tcheck.sh r
+sleep 1
+ip netns exec ns2 pkill iperf3 > /dev/null 2>&1
+
+server=$(dmesg | grep -m1 "role 3" | grep -oP '\(\K[^\)]+')
+client=$(dmesg | grep -m1 "role 2" | grep -oP '\(\K[^\)]+')
+sstring="DEQ($client): send"
+rstring="DEQ($server): receive"
+dstring="DEQ($server): delaying"
+fstring="DEQ($server): forward"
+
+dmesg | grep -e "$sstring" -e "$rstring" -e "$dstring" -e "$fstring" > /tmp/mptest.log
 
 python3 /home/user/Documents/mpplot/delayplot.py &
 python3 /home/user/Documents/mpplot/line.py &
 python3 /home/user/Documents/mpplot/owd.py &
+
+echo "Packet count - rx: $(dmesg | grep "$rstring" | wc -l) delay: $(dmesg | grep "$dstring" | wc -l)"
