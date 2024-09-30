@@ -20,7 +20,9 @@ with open(log_file_path, "r") as log_file:
             delay_value = int(match.group(3))
             bracket_value = int(match.group(4))
 
-            events.append((packet_number, delay_value, bracket_value))
+            # Filter to include only events where both delay and bracket are in the range 0-200
+            if 0 <= delay_value <= 200 and 0 <= bracket_value <= 200:
+                events.append((packet_number, delay_value, bracket_value))
 
 # Sort events by packet number
 events.sort()
